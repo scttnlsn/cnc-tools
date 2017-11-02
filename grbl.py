@@ -68,7 +68,7 @@ class Status(object):
 
     @classmethod
     def is_status(cls, value):
-        return self.regex.match(value) != None
+        return cls.regex.match(value) != None
 
     def __init__(self, value):
         self.value = value
@@ -87,10 +87,12 @@ class Status(object):
         return self.state == 'Idle'
 
     def mpos(self):
-        return Coordinates.parse(self.segments['MPos'])
+        if 'MPos' in self.segments:
+            return Coordinates.parse(self.segments['MPos'])
 
     def wco(self):
-        return Coordinates.parse(self.segments['WCO'])
+        if 'WCO' in self.segments:
+            return Coordinates.parse(self.segments['WCO'])
 
 class PendingMessages(Exception):
     pass
@@ -142,14 +144,15 @@ class Sender(object):
         return response
 
     def status(self):
-        serial.write('?')
+        self.serial.write('?')
+        self.serial.flush()
         lines = self._read_until(lambda line: Status.is_status(line))
-        self.messages = self.messages.concat(lines[0:-1])
+        self.messages += lines[0:-1]
         return self._update_status(Status(lines[-1]))
 
     def wait(self):
         while True:
-            if self._save_status(self.status()).is_idle():
+            if self.status().is_idle():
                 break
             time.sleep(self.polling_interval)
 
@@ -169,7 +172,9 @@ class Sender(object):
 
         return lines
 
-    def _update_status(status):
+    def _update_status(self, status):
         self.mpos = status.mpos()
-        self.wco = status.wco()
+        wco = status.wco()
+        if wco:
+            self.wco = wco
         return status

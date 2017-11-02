@@ -1,10 +1,11 @@
+import argparse
 import grbl
 import logging
 import numpy
 import re
 import sys
 
-class Result(object):
+class Result:
     regex = re.compile('\[PRB:(.*)\]')
 
     def __init__(self, value):
@@ -20,73 +21,111 @@ class Result(object):
     def is_success(self):
         return self.code == '1'
 
-class Probe(object):
+class Probe:
 
     def __init__(self, sender):
         self.sender = sender
 
-    def probe(self, min_z, feedrate):
+    def __call__(self, min_z, feedrate):
         self.sender.send_gcode('G38.2 Z%s F%s' % (min_z, feedrate))
         result = Result(self.sender.message())
         return result
 
     def find_z_origin(self, min_z, feedrate):
-        result = self.probe(min_z, feedrate)
+        # raise z in case we're already touching the surface
+        sender.send_gcode('G0 Z1')
 
+        result = self(min_z, feedrate)
         if result.is_success():
             # slowly go back to probe result in case we overshot (decelerating)
-            self.sender.send_gcode('G1 Z%s F1' % result.position.z)
+            self.sender.send_gcode('G1 Z%f F1' % result.position.z)
+            self.sender.wait()
 
             # zero out work offsets
             self.sender.send_gcode('G92 Z0')
+            self.sender.wait()
         else:
             raise Exception('probe failed')
 
-def grid_points(x_max, x_step, y_max, y_step):
-    points = []
-    x_num = x_max / x_step + 1
-    y_num = y_max / y_step + 1
+class GridProbe:
 
-    y_min = 0
+    def __init__(self, probe, **kwargs):
+        self.probe = probe
+        self.sender = self.probe.sender
 
-    for x in numpy.linspace(0, x_max, x_num):
-        for y in numpy.linspace(y_min, y_max, y_num):
-            points.append((x, y))
-        y_min, y_max = y_max, y_min
+        self.x_max = kwargs['x_max']
+        self.x_step = kwargs['x_step']
+        self.y_max = kwargs['y_max']
+        self.y_step = kwargs['y_step']
 
-    return points
+        self.z_min = kwargs['z_min']
+        self.feedrate = kwargs['feedrate']
+
+    def points(self):
+        points = []
+        x_max = self.x_max
+        x_num = x_max / self.x_step + 1
+        y_max = self.y_max
+        y_num = y_max / self.y_step + 1
+
+        y_min = 0
+
+        for x in numpy.linspace(0, x_max, x_num):
+            for y in numpy.linspace(y_min, y_max, y_num):
+                points.append((x, y))
+            y_min, y_max = y_max, y_min
+
+        return points
+
+    def probe_position(self, x, y):
+        sender.send_gcode('G0 Z1')
+        sender.send_gcode('G0 X%f Y%f' % (x, y))
+        return self.probe(self.z_min, self.feedrate)
+
+    def run(self):
+        for x, y in self.points():
+            result = self.probe_position(x, y)
+            position = result.position - sender.wco
+            yield position
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Probe Z surface')
+    parser.add_argument('-o', metavar='OUTPUT', dest='output', help='path to output file', required=True)
+    parser.add_argument('-d', metavar='DEVICE', dest='device', help='serial device', required=True)
+    parser.add_argument('--x-max', metavar='X_MAX', dest='x_max', help='max x value', required=True)
+    parser.add_argument('--x-step', metavar='X_STEP', dest='x_step', help='x step increment')
+    parser.add_argument('--y-max', metavar='Y_MAX', dest='y_max', help='max y value', required=True)
+    parser.add_argument('--y-step', metavar='Y_STEP', dest='y_step', help='y step increment')
+    parser.add_argument('--z-min', metavar='Z_MIN', dest='z_min', help='minimum z value')
+    parser.add_argument('--feedrate', metavar='FEEDRATE', dest='feedrate', help='probe feedrate')
+    return parser.parse_args()
 
 if __name__ == '__main__':
-    serial = grbl.connect(sys.argv[1])
+    args = parse_args()
+
+    serial = grbl.connect(args.device)
     sender = grbl.Sender(serial)
     probe = Probe(sender)
 
-    # raise z in case we're already touching surface
-    sender.send_gcode('G0 Z1')
-
     probe.find_z_origin(-10, 50)
 
-    sender.wait
-    print('position: %s' % sender.position())
+    grid = GridProbe(probe,
+                     x_max=args.x_max, x_step=args.x_step or 10,
+                     y_max=args.y_max, y_step=args.y_step or 10,
+                     z_min=args.z_min or -0.5,
+                     feedrate=args.feedrate or 50)
 
-    points = []
+    results = []
 
-    for x, y in grid_points(50, 10, 50, 10):
-        print('probing: %f,%f...' % (x, y))
+    print('probing...')
+    for point in grid.run():
+        print('result: %f,%f,%f' % (point.x, point.y, point.z))
+        results.append(point)
 
-        sender.send_gcode('G0 Z1')
-        sender.send_gcode('G0 X%f Y%f' % (x, y))
-
-        result = probe.probe(-0.5, 50)
-        position = result.position - sender.wco
-        points.append(position)
-
-        print('position: %s' % position)
-
-    # return to origin
+    # raise and return to xy origin
     sender.send_gcode('G0 Z1')
     sender.send_gcode('G0 X0 Y0')
 
-    with open('z_offsets.csv') as f:
-        for coord in points:
-            f.write('%s,%s,%s' % (coord.x, coord.y, coord.z))
+    with open(args.output, 'w') as f:
+        for coord in results:
+            f.write('%s,%s,%s\n' % (coord.x, coord.y, coord.z))
