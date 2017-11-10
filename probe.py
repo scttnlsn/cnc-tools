@@ -53,13 +53,13 @@ class GridProbe:
         self.probe = probe
         self.sender = self.probe.sender
 
-        self.x_max = kwargs['x_max']
-        self.x_step = kwargs['x_step']
-        self.y_max = kwargs['y_max']
-        self.y_step = kwargs['y_step']
+        self.x_max = float(kwargs['x_max'])
+        self.x_step = float(kwargs['x_step'])
+        self.y_max = float(kwargs['y_max'])
+        self.y_step = float(kwargs['y_step'])
 
-        self.z_min = kwargs['z_min']
-        self.feedrate = kwargs['feedrate']
+        self.z_min = float(kwargs['z_min'])
+        self.feedrate = float(kwargs['feedrate'])
 
     def points(self):
         points = []
