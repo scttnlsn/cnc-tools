@@ -107,6 +107,9 @@ if __name__ == '__main__':
     sender = grbl.Sender(serial)
     probe = Probe(sender)
 
+    sender.send_gcode('G92 X0 Y0 Z0')
+    sender.wait()
+
     probe.find_z_origin(-10, 50)
 
     grid = GridProbe(probe,
